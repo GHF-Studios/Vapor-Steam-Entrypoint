@@ -4,7 +4,7 @@ schema = 1
 name = "vapor-entrypoint"
 organization = "ghf-studios"
 version = "0.5.0"
-repository = "https://github.com/GHF-Studios/Vapor-Entrypoint"
+repository = "https://github.com/GHF-Studios/Vapor-Steam-Entrypoint"
 binaries = ["vapor-entrypoint"]
 
 [toolchain]
