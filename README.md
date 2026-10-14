@@ -1,20 +1,24 @@
 # Vapor Entrypoint
 
-Vapor Entrypoint is the Steam-facing terminal adapter for the installed Vapor
-app.
+Vapor Entrypoint is the Steam-facing launch adapter for the installed Vapor
+app. The `studio` route starts Vapor Studio directly; explicit recovery routes
+continue through the terminal wrapper.
 
-It intentionally does not understand Vapor launch targets. Steam starts
-`vapor-entrypoint[.exe]`, the entrypoint opens the platform terminal, starts
-the matching app-local launch script with the internal `--hold` wrapper flag,
-forwards Steam's launch arguments after that flag, waits for the terminal to
-close, and exits with that terminal status.
+Steam starts `vapor-entrypoint[.exe]` with `studio` to open the sibling
+`vapor-studio[.exe]` in the same target directory. Steam's default launch
+configuration should use this route. `play` asks Studio to build and run the
+selected profile's composition; if no selection resolves, Studio remains open
+and explains the issue. `shell` and `installer` retain terminal-backed
+recovery behavior.
 
 Runtime paths:
 
 ```text
 Steam
 └── bin/<target>/vapor-entrypoint[.exe]
-    └── Konsole or cmd
+    ├── studio -> bin/<target>/vapor-studio[.exe]
+    ├── play -> bin/<target>/vapor-studio[.exe] --play
+    └── recovery modes -> Konsole or cmd
         └── bin/vapor-launch.sh or bin\vapor-launch.cmd
             └── vapor or vapor-installer
 ```
@@ -25,6 +29,6 @@ Logs go to:
 <app-root>/.vapor/logs/entrypoint.log
 ```
 
-The launch scripts, app-root tool layer, `vapor-installer`, and Vapor Shell own
-all product behavior. This project owns only app-root discovery, terminal
-launch, argument forwarding, and entrypoint logging.
+This project owns app-root discovery, Studio handoff, terminal recovery
+launches, argument forwarding, and entrypoint logging. Vapor Core and Vapor
+Shell remain responsible for content and runtime behavior.
