@@ -52,12 +52,17 @@ fn run() -> Result<ExitStatus, String> {
     ));
 
     if starts_gui(&arguments) {
-        if arguments.first().is_some_and(|argument| argument == "installer")
+        if arguments
+            .first()
+            .is_some_and(|argument| argument == "installer")
             && !gui_executable(&executable).is_file()
         {
             let script = platform_script(&app_root);
             if !script.is_file() {
-                return Err(format!("installer fallback script is missing: {}", script.display()));
+                return Err(format!(
+                    "installer fallback script is missing: {}",
+                    script.display()
+                ));
             }
             return launch_terminal(&app_root, &script, &arguments, &mut log);
         }
@@ -130,6 +135,11 @@ fn launch_gui(
     Ok(status)
 }
 
+include!("entrypoint/app_root.rs");
+include!("entrypoint/terminal.rs");
+include!("entrypoint/redaction.rs");
+include!("entrypoint/log.rs");
+
 #[cfg(test)]
 mod launch_mode_tests {
     use super::{gui_arguments, gui_executable, starts_gui};
@@ -148,21 +158,31 @@ mod launch_mode_tests {
             OsString::from("."),
         ];
         assert!(starts_gui(&arguments));
-        assert_eq!(gui_arguments(&arguments), [OsString::from("--mode"), OsString::from("studio"), OsString::from("--workspace"), OsString::from(".")]);
+        assert_eq!(
+            gui_arguments(&arguments),
+            [
+                OsString::from("--mode"),
+                OsString::from("studio"),
+                OsString::from("--workspace"),
+                OsString::from(".")
+            ]
+        );
     }
 
     #[test]
     fn game_and_shell_modes_keep_terminal_routing() {
-        for mode in [OsString::from("shell")] {
-            assert!(!starts_gui(&[mode]));
-        }
+        assert!(!starts_gui(&[OsString::from("shell")]));
+        assert!(!starts_gui(&[OsString::from("game")]));
     }
 
     #[test]
     fn play_opens_studio_gui_in_direct_play_mode() {
         let arguments = [OsString::from("play")];
         assert!(starts_gui(&arguments));
-        assert_eq!(gui_arguments(&arguments), [OsString::from("--mode"), OsString::from("play")]);
+        assert_eq!(
+            gui_arguments(&arguments),
+            [OsString::from("--mode"), OsString::from("play")]
+        );
     }
 
     #[test]
@@ -181,8 +201,3 @@ mod launch_mode_tests {
         );
     }
 }
-
-include!("entrypoint/app_root.rs");
-include!("entrypoint/terminal.rs");
-include!("entrypoint/redaction.rs");
-include!("entrypoint/log.rs");
