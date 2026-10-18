@@ -66,6 +66,7 @@ fn run() -> Result<ExitStatus, String> {
             }
             return launch_terminal(&app_root, &script, &arguments, &mut log);
         }
+        ensure_client_service(&executable, &app_root, &mut log)?;
         let gui_arguments = gui_arguments(&arguments);
         return launch_gui(&executable, &app_root, &gui_arguments, &mut log);
     }
@@ -77,6 +78,7 @@ fn run() -> Result<ExitStatus, String> {
         return Err(message);
     }
 
+    ensure_client_service(&executable, &app_root, &mut log)?;
     launch_terminal(&app_root, &script, &arguments, &mut log)
 }
 
@@ -95,6 +97,45 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
         }
         _ => vec![OsString::from("--mode"), OsString::from("studio")],
     }
+}
+
+
+fn ensure_client_service(
+    entrypoint: &Path,
+    app_root: &Path,
+    log: &mut EntryLog,
+) -> Result<(), String> {
+    let service = entrypoint
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(if cfg!(windows) {
+            "vapor-client-service.exe"
+        } else {
+            "vapor-client-service"
+        });
+    if !service.is_file() {
+        let message = format!("Vapor Client service is missing: {}", service.display());
+        log.write(&message);
+        return Err(format!("{message}; repair or locally deploy Vapor Client"));
+    }
+    let application_executable = gui_executable(entrypoint);
+    log.write(format!("ensuring shared Vapor Client service from {}", service.display()));
+    let status = Command::new(&service)
+        .arg("--ensure")
+        .arg("--application-executable")
+        .arg(&application_executable)
+        .arg("--workshop-app-id")
+        .arg("2122620")
+        .current_dir(app_root)
+        .env("VAPOR_HOME", app_root)
+        .status()
+        .map_err(|error| format!("could not start Vapor Client service bootstrap: {error}"))?;
+    if !status.success() {
+        let message = format!("Vapor Client service bootstrap exited with {status}");
+        log.write(&message);
+        return Err(message);
+    }
+    Ok(())
 }
 
 fn gui_executable(entrypoint: &Path) -> PathBuf {
