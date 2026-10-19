@@ -99,7 +99,6 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     }
 }
 
-
 fn ensure_client_service(
     entrypoint: &Path,
     app_root: &Path,
@@ -119,7 +118,10 @@ fn ensure_client_service(
         return Err(format!("{message}; repair or locally deploy Vapor Client"));
     }
     let application_executable = gui_executable(entrypoint);
-    log.write(format!("ensuring shared Vapor Client service from {}", service.display()));
+    log.write(format!(
+        "ensuring shared Vapor Client service from {}",
+        service.display()
+    ));
     let status = Command::new(&service)
         .arg("--ensure")
         .arg("--application-executable")
