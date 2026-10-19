@@ -66,7 +66,11 @@ fn run() -> Result<ExitStatus, String> {
             }
             return launch_terminal(&app_root, &script, &arguments, &mut log);
         }
-        ensure_client_service(&executable, &app_root, &mut log)?;
+        if requires_client_service(&arguments) {
+            ensure_client_service(&executable, &app_root, &mut log)?;
+        } else {
+            log.write("launching Installer without the shared service for recovery access");
+        }
         let gui_arguments = gui_arguments(&arguments);
         return launch_gui(&executable, &app_root, &gui_arguments, &mut log);
     }
@@ -88,6 +92,12 @@ fn starts_gui(arguments: &[OsString]) -> bool {
     })
 }
 
+fn requires_client_service(arguments: &[OsString]) -> bool {
+    !arguments
+        .first()
+        .is_some_and(|argument| argument == "installer")
+}
+
 fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     match arguments.first().map(|argument| argument.to_string_lossy()) {
         Some(mode) if mode == "studio" || mode == "play" || mode == "installer" => {
@@ -96,6 +106,24 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
             forwarded
         }
         _ => vec![OsString::from("--mode"), OsString::from("studio")],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_client_service;
+    use std::ffi::OsString;
+
+    #[test]
+    fn installer_can_start_without_the_shared_service() {
+        assert!(!requires_client_service(&[OsString::from("installer")]));
+    }
+
+    #[test]
+    fn normal_frontends_keep_the_shared_service_bootstrap() {
+        for mode in ["studio", "play", "shell"] {
+            assert!(requires_client_service(&[OsString::from(mode)]));
+        }
     }
 }
 
