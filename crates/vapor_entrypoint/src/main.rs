@@ -72,6 +72,19 @@ fn run() -> Result<ExitStatus, String> {
             .first()
             .is_some_and(|argument| argument == "play" || argument == "game")
     {
+        if !player_setup_ready(&app_root) {
+            log.write("player setup is missing; opening the required first-launch setup");
+            let onboarding = [
+                OsString::from("installer"),
+                OsString::from("--first-launch"),
+            ];
+            return launch_gui(
+                &executable,
+                &app_root,
+                &gui_arguments(&onboarding),
+                &mut log,
+            );
+        }
         ensure_client_service(&executable, &app_root, "game", &mut log)?;
         return launch_default_composition(&executable, &app_root, &mut log);
     }
@@ -127,6 +140,15 @@ fn entrypoint_mode(arguments: &[OsString]) -> String {
         .unwrap_or_else(|| "game".to_owned())
 }
 
+fn player_setup_ready(app_root: &Path) -> bool {
+    let receipt = app_root.join(".vapor/state/installer/player.toml");
+    fs::read_to_string(receipt).ok().is_some_and(|source| {
+        source
+            .lines()
+            .any(|line| line.trim() == "state = \"ready\"")
+    })
+}
+
 fn requires_client_service(arguments: &[OsString]) -> bool {
     !arguments
         .first()
@@ -142,12 +164,7 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
                 || mode == "installer"
                 || mode == "ide" =>
         {
-            let gui_mode = if mode == "launcher" {
-                "play"
-            } else {
-                mode.as_ref()
-            };
-            let mut forwarded = vec![OsString::from("--mode"), OsString::from(gui_mode)];
+            let mut forwarded = vec![OsString::from("--mode"), OsString::from(mode.as_ref())];
             forwarded.extend_from_slice(&arguments[1..]);
             forwarded
         }
@@ -221,7 +238,8 @@ fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsS
 #[cfg(test)]
 mod tests {
     use super::{
-        entrypoint_mode, gui_arguments, requires_client_service, starts_gui, terminal_request,
+        entrypoint_mode, gui_arguments, player_setup_ready, requires_client_service, starts_gui,
+        terminal_request,
     };
     use std::{ffi::OsString, path::PathBuf};
 
@@ -251,7 +269,7 @@ mod tests {
         assert_eq!(entrypoint_mode(&arguments), "launcher");
         assert_eq!(
             gui_arguments(&arguments),
-            [OsString::from("--mode"), OsString::from("play")]
+            [OsString::from("--mode"), OsString::from("launcher")]
         );
     }
 
@@ -302,6 +320,40 @@ mod tests {
         assert_eq!(forwarded, [OsString::from("argument")]);
         assert!(terminal_request(&arguments[..4]).is_err());
     }
+
+    #[test]
+    fn player_setup_is_ready_only_when_the_vapor_receipt_says_ready() {
+        let app_root = std::env::temp_dir().join(format!(
+            "vapor-entrypoint-player-setup-{}",
+            std::process::id()
+        ));
+        let receipt = app_root.join(".vapor/state/installer/player.toml");
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+
+        assert!(!player_setup_ready(&app_root));
+        std::fs::write(&receipt, "schema = 1\nstate = \"pending\"\n").unwrap();
+        assert!(!player_setup_ready(&app_root));
+        std::fs::write(&receipt, "schema = 1\nstate = \"ready\"\n").unwrap();
+        assert!(player_setup_ready(&app_root));
+
+        std::fs::remove_dir_all(app_root).unwrap();
+    }
+
+    #[test]
+    fn first_launch_onboarding_is_forwarded_to_the_installer_gui() {
+        let arguments = [
+            OsString::from("installer"),
+            OsString::from("--first-launch"),
+        ];
+        assert_eq!(
+            gui_arguments(&arguments),
+            [
+                OsString::from("--mode"),
+                OsString::from("installer"),
+                OsString::from("--first-launch"),
+            ]
+        );
+    }
 }
 
 fn ensure_client_service(
@@ -328,14 +380,18 @@ fn ensure_client_service(
         "ensuring shared Vapor Client service from {}",
         service.display()
     ));
-    let status = Command::new(&service)
+    let mut command = Command::new(&service);
+    command
         .arg("--ensure")
         .arg("--application-executable")
         .arg(&application_executable)
         .arg("--workshop-app-id")
         .arg("2122620")
         .current_dir(app_root)
-        .env("VAPOR_HOME", app_root)
+        .env("VAPOR_HOME", app_root);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let status = command
         .status()
         .map_err(|error| format!("could not start Vapor Client service bootstrap: {error}"))?;
     if !status.success() {
@@ -395,6 +451,8 @@ fn launch_gui(
         .args(arguments)
         .current_dir(app_root)
         .env("VAPOR_HOME", app_root);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let status = command
         .status()
         .map_err(|error| format!("failed to launch {product}: {error}"))?;

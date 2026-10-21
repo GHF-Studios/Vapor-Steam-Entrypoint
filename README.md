@@ -23,7 +23,7 @@ Steam
 └── bin/<target>/vapor-entrypoint[.exe]
     ├── (no arguments) -> vapor[.exe] launch default
     ├── chooser -> vapor-gui[.exe] --mode chooser
-    │   ├── launcher -> vapor-launcher[.exe] --mode play
+    │   ├── launcher -> vapor-launcher[.exe] --mode launcher
     │   ├── studio -> vapor-studio[.exe]
     │   ├── ide -> vapor-ide[.exe]
     │   ├── installer -> vapor-installer-gui[.exe]
