@@ -107,7 +107,7 @@ fn run() -> Result<ExitStatus, String> {
 
 fn starts_gui(arguments: &[OsString]) -> bool {
     arguments.first().is_none_or(|argument| {
-        argument == "studio" || argument == "play" || argument == "installer"
+        argument == "studio" || argument == "play" || argument == "installer" || argument == "ide"
     })
 }
 
@@ -119,7 +119,9 @@ fn requires_client_service(arguments: &[OsString]) -> bool {
 
 fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     match arguments.first().map(|argument| argument.to_string_lossy()) {
-        Some(mode) if mode == "studio" || mode == "play" || mode == "installer" => {
+        Some(mode)
+            if mode == "studio" || mode == "play" || mode == "installer" || mode == "ide" =>
+        {
             let mut forwarded = vec![OsString::from("--mode"), OsString::from(mode.as_ref())];
             forwarded.extend_from_slice(&arguments[1..]);
             forwarded
@@ -154,7 +156,7 @@ fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsS
 
 #[cfg(test)]
 mod tests {
-    use super::{requires_client_service, terminal_request};
+    use super::{gui_arguments, requires_client_service, starts_gui, terminal_request};
     use std::{ffi::OsString, path::PathBuf};
 
     #[test]
@@ -164,9 +166,29 @@ mod tests {
 
     #[test]
     fn normal_frontends_keep_the_shared_service_bootstrap() {
-        for mode in ["studio", "play", "shell"] {
+        for mode in ["studio", "play", "shell", "ide"] {
             assert!(requires_client_service(&[OsString::from(mode)]));
         }
+    }
+
+    #[test]
+    fn rust_ide_is_a_gui_mode_that_uses_the_shared_client_service() {
+        let arguments = [
+            OsString::from("ide"),
+            OsString::from("--workspace"),
+            OsString::from("/workspace/rust-project"),
+        ];
+        assert!(starts_gui(&arguments));
+        assert!(requires_client_service(&arguments));
+        assert_eq!(
+            gui_arguments(&arguments),
+            [
+                OsString::from("--mode"),
+                OsString::from("ide"),
+                OsString::from("--workspace"),
+                OsString::from("/workspace/rust-project"),
+            ]
+        );
     }
 
     #[test]
