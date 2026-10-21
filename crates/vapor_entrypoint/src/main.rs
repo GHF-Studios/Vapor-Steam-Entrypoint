@@ -1,8 +1,8 @@
-//! Steam-facing entrypoint for Vapor Studio and terminal recovery modes.
+//! Steam-facing entrypoint for Vapor's player and creator modes.
 //!
-//! Steam starts this executable directly into Studio. The `play` argument asks
-//! Studio to run the selected composition; `shell` and `installer` retain their
-//! terminal-based recovery paths.
+//! A launch without arguments starts the app's default playable composition.
+//! The `chooser` mode exposes the Launcher and creator tools; `shell` and
+//! `installer` retain recovery paths.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -65,12 +65,20 @@ fn run() -> Result<ExitStatus, String> {
         );
     }
 
-    if starts_gui(&arguments) {
-        if arguments
+    // Steam's primary entrypoint is the game path. Keep it independent of the
+    // chooser and player Launcher so a normal Play click reaches the game.
+    if arguments.is_empty()
+        || arguments
             .first()
-            .is_some_and(|argument| argument == "installer")
-            && !gui_executable(&executable, false).is_file()
-        {
+            .is_some_and(|argument| argument == "play" || argument == "game")
+    {
+        ensure_client_service(&executable, &app_root, "game", &mut log)?;
+        return launch_default_composition(&executable, &app_root, &mut log);
+    }
+
+    if starts_gui(&arguments) {
+        let mode = entrypoint_mode(&arguments);
+        if mode == "installer" && !application_executable(&executable, &mode).is_file() {
             let script = platform_script(&app_root);
             if !script.is_file() {
                 return Err(format!(
@@ -81,14 +89,11 @@ fn run() -> Result<ExitStatus, String> {
             return launch_terminal(&app_root, &script, &arguments, &mut log);
         }
         if requires_client_service(&arguments) {
-            ensure_client_service(
-                &executable,
-                &app_root,
-                arguments.first().is_some_and(|argument| argument == "play"),
-                &mut log,
-            )?;
+            ensure_client_service(&executable, &app_root, &mode, &mut log)?;
         } else {
-            log.write("launching Installer without the shared service for recovery access");
+            log.write(format!(
+                "launching {mode} without the shared service bootstrap"
+            ));
         }
         let gui_arguments = gui_arguments(&arguments);
         return launch_gui(&executable, &app_root, &gui_arguments, &mut log);
@@ -101,33 +106,92 @@ fn run() -> Result<ExitStatus, String> {
         return Err(message);
     }
 
-    ensure_client_service(&executable, &app_root, false, &mut log)?;
+    ensure_client_service(&executable, &app_root, "shell", &mut log)?;
     launch_terminal(&app_root, &script, &arguments, &mut log)
 }
 
 fn starts_gui(arguments: &[OsString]) -> bool {
-    arguments.first().is_none_or(|argument| {
-        argument == "studio" || argument == "play" || argument == "installer" || argument == "ide"
+    arguments.first().is_some_and(|argument| {
+        argument == "studio"
+            || argument == "launcher"
+            || argument == "chooser"
+            || argument == "installer"
+            || argument == "ide"
     })
+}
+
+fn entrypoint_mode(arguments: &[OsString]) -> String {
+    arguments
+        .first()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "game".to_owned())
 }
 
 fn requires_client_service(arguments: &[OsString]) -> bool {
     !arguments
         .first()
-        .is_some_and(|argument| argument == "installer")
+        .is_some_and(|argument| argument == "installer" || argument == "chooser")
 }
 
 fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     match arguments.first().map(|argument| argument.to_string_lossy()) {
         Some(mode)
-            if mode == "studio" || mode == "play" || mode == "installer" || mode == "ide" =>
+            if mode == "studio"
+                || mode == "launcher"
+                || mode == "chooser"
+                || mode == "installer"
+                || mode == "ide" =>
         {
-            let mut forwarded = vec![OsString::from("--mode"), OsString::from(mode.as_ref())];
+            let gui_mode = if mode == "launcher" {
+                "play"
+            } else {
+                mode.as_ref()
+            };
+            let mut forwarded = vec![OsString::from("--mode"), OsString::from(gui_mode)];
             forwarded.extend_from_slice(&arguments[1..]);
             forwarded
         }
-        _ => vec![OsString::from("--mode"), OsString::from("studio")],
+        _ => vec![OsString::from("--mode"), OsString::from("chooser")],
     }
+}
+
+fn launch_default_composition(
+    entrypoint: &Path,
+    app_root: &Path,
+    log: &mut EntryLog,
+) -> Result<ExitStatus, String> {
+    let executable = application_executable(entrypoint, "game");
+    if !executable.is_file() {
+        let message = format!("Vapor runtime is missing: {}", executable.display());
+        log.write(&message);
+        return Err(format!("{message}; repair or locally deploy Vapor Client"));
+    }
+
+    log.write(format!(
+        "launching the default playable composition through {}",
+        executable.display()
+    ));
+    let output = log.stderr().ok_or_else(|| {
+        format!(
+            "could not open entrypoint log for game launch: {}",
+            log.path.display()
+        )
+    })?;
+    let mut command = Command::new(&executable);
+    command
+        .args(["launch", "default"])
+        .current_dir(app_root)
+        .env("VAPOR_HOME", app_root)
+        .stdout(output.try_clone().map_err(|error| error.to_string())?)
+        .stderr(output);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let status = command
+        .status()
+        .map_err(|error| format!("failed to launch the default composition: {error}"))?;
+    log.write(format!("default composition launch exited with {status}"));
+    Ok(status)
 }
 
 fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsString>), String> {
@@ -156,7 +220,9 @@ fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsS
 
 #[cfg(test)]
 mod tests {
-    use super::{gui_arguments, requires_client_service, starts_gui, terminal_request};
+    use super::{
+        entrypoint_mode, gui_arguments, requires_client_service, starts_gui, terminal_request,
+    };
     use std::{ffi::OsString, path::PathBuf};
 
     #[test]
@@ -166,9 +232,38 @@ mod tests {
 
     #[test]
     fn normal_frontends_keep_the_shared_service_bootstrap() {
-        for mode in ["studio", "play", "shell", "ide"] {
+        for mode in ["studio", "launcher", "shell", "ide", "game"] {
             assert!(requires_client_service(&[OsString::from(mode)]));
         }
+    }
+
+    #[test]
+    fn default_entrypoint_launches_the_default_composition() {
+        assert!(!starts_gui(&[]));
+        assert!(requires_client_service(&[]));
+        assert_eq!(entrypoint_mode(&[]), "game");
+    }
+
+    #[test]
+    fn launcher_is_a_separate_player_gui_route() {
+        let arguments = [OsString::from("launcher")];
+        assert!(starts_gui(&arguments));
+        assert_eq!(entrypoint_mode(&arguments), "launcher");
+        assert_eq!(
+            gui_arguments(&arguments),
+            [OsString::from("--mode"), OsString::from("play")]
+        );
+    }
+
+    #[test]
+    fn chooser_is_a_bootstrap_free_gui_entrypoint() {
+        let arguments = [OsString::from("chooser")];
+        assert!(!requires_client_service(&arguments));
+        assert!(starts_gui(&arguments));
+        assert_eq!(
+            gui_arguments(&arguments),
+            [OsString::from("--mode"), OsString::from("chooser")]
+        );
     }
 
     #[test]
@@ -212,7 +307,7 @@ mod tests {
 fn ensure_client_service(
     entrypoint: &Path,
     app_root: &Path,
-    player_frontend: bool,
+    mode: &str,
     log: &mut EntryLog,
 ) -> Result<(), String> {
     let service = entrypoint
@@ -228,7 +323,7 @@ fn ensure_client_service(
         log.write(&message);
         return Err(format!("{message}; repair or locally deploy Vapor Client"));
     }
-    let application_executable = gui_executable(entrypoint, player_frontend);
+    let application_executable = application_executable(entrypoint, mode);
     log.write(format!(
         "ensuring shared Vapor Client service from {}",
         service.display()
@@ -251,13 +346,17 @@ fn ensure_client_service(
     Ok(())
 }
 
-fn gui_executable(entrypoint: &Path, player_frontend: bool) -> PathBuf {
-    let executable = match (player_frontend, cfg!(windows)) {
-        (true, true) => "vapor-launcher.exe",
-        (true, false) => "vapor-launcher",
-        (false, true) => "vapor-gui.exe",
-        (false, false) => "vapor-gui",
+fn application_executable(entrypoint: &Path, mode: &str) -> PathBuf {
+    let base_name = match mode {
+        "game" | "play" | "shell" => "vapor",
+        "launcher" => "vapor-launcher",
+        "studio" => "vapor-studio",
+        "ide" => "vapor-ide",
+        "installer" => "vapor-installer-gui",
+        "chooser" => "vapor-gui",
+        _ => "vapor",
     };
+    let executable = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
     entrypoint
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -270,14 +369,18 @@ fn launch_gui(
     arguments: &[OsString],
     log: &mut EntryLog,
 ) -> Result<ExitStatus, String> {
-    let player_frontend = arguments
+    let mode = arguments
         .windows(2)
-        .any(|pair| pair[0] == "--mode" && pair[1] == "play");
-    let executable = gui_executable(entrypoint, player_frontend);
-    let product = if player_frontend {
-        "Vapor Launcher"
-    } else {
-        "Vapor GUI"
+        .find(|pair| pair[0] == "--mode")
+        .map(|pair| pair[1].to_string_lossy().into_owned())
+        .unwrap_or_else(|| "chooser".to_owned());
+    let executable = application_executable(entrypoint, &mode);
+    let product = match mode.as_str() {
+        "play" | "launcher" => "Vapor Launcher",
+        "studio" => "Vapor Studio",
+        "ide" => "Vapor IDE",
+        "installer" => "Vapor Installer",
+        _ => "Vapor chooser",
     };
     if !executable.is_file() {
         let message = format!("{product} is missing: {}", executable.display());
@@ -306,12 +409,12 @@ include!("entrypoint/log.rs");
 
 #[cfg(test)]
 mod launch_mode_tests {
-    use super::{gui_arguments, gui_executable, starts_gui};
+    use super::{application_executable, gui_arguments, starts_gui};
     use std::ffi::OsString;
 
     #[test]
-    fn no_arguments_launch_studio_gui() {
-        assert!(starts_gui(&[]));
+    fn no_arguments_launch_the_default_composition_without_a_gui() {
+        assert!(!starts_gui(&[]));
     }
 
     #[test]
@@ -340,37 +443,40 @@ mod launch_mode_tests {
     }
 
     #[test]
-    fn play_uses_the_dedicated_launcher_binary() {
-        let arguments = [OsString::from("play")];
-        assert!(starts_gui(&arguments));
-        assert_eq!(
-            gui_arguments(&arguments),
-            [OsString::from("--mode"), OsString::from("play")]
-        );
+    fn play_and_game_modes_use_the_vapor_runtime() {
+        for mode in ["play", "game"] {
+            assert!(!starts_gui(&[OsString::from(mode)]));
+            let expected = format!("vapor{}", std::env::consts::EXE_SUFFIX);
+            assert_eq!(
+                application_executable(
+                    std::path::Path::new("/vapor/bin/target/vapor-entrypoint"),
+                    mode
+                )
+                .file_name()
+                .unwrap(),
+                std::ffi::OsStr::new(&expected)
+            );
+        }
     }
 
     #[test]
-    fn gui_binary_is_resolved_as_entrypoint_sibling_for_any_target_triple() {
+    fn each_gui_product_is_resolved_as_an_entrypoint_sibling() {
         let entrypoint =
             std::path::Path::new("/vapor/bin/x86_64-pc-windows-gnullvm/vapor-entrypoint.exe");
-        let expected_name = if cfg!(windows) {
-            "vapor-gui.exe"
-        } else {
-            "vapor-gui"
-        };
-
-        assert_eq!(
-            gui_executable(entrypoint, false),
-            entrypoint.parent().unwrap().join(expected_name)
-        );
-        let launcher_name = if cfg!(windows) {
-            "vapor-launcher.exe"
-        } else {
-            "vapor-launcher"
-        };
-        assert_eq!(
-            gui_executable(entrypoint, true),
-            entrypoint.parent().unwrap().join(launcher_name)
-        );
+        for (mode, base_name) in [
+            ("play", "vapor"),
+            ("game", "vapor"),
+            ("launcher", "vapor-launcher"),
+            ("chooser", "vapor-gui"),
+            ("studio", "vapor-studio"),
+            ("ide", "vapor-ide"),
+            ("installer", "vapor-installer-gui"),
+        ] {
+            let name = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
+            assert_eq!(
+                application_executable(entrypoint, mode),
+                entrypoint.parent().unwrap().join(name)
+            );
+        }
     }
 }
