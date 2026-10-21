@@ -1,8 +1,8 @@
 # Vapor Steam Entrypoint
 
 Vapor Steam Entrypoint is the Steam-facing launch adapter for the installed
-Vapor app. It dispatches Studio and Installer into Vapor-GUI and preserves
-terminal access through Vapor-CLI.
+Vapor app. It dispatches Studio and Installer into Vapor-GUI, Play into Vapor Launcher,
+and preserves terminal access through Vapor-CLI.
 
 Steam starts `vapor-entrypoint[.exe]` with `studio` to open the sibling
 `vapor-gui[.exe]` in the same target directory. Steam's launch options keep
@@ -16,7 +16,7 @@ Runtime paths:
 Steam
 └── bin/<target>/vapor-entrypoint[.exe]
     ├── studio -> vapor-gui[.exe] --mode studio
-    ├── play -> vapor-gui[.exe] --mode play
+    ├── play -> vapor-launcher[.exe] --mode play
     ├── installer -> vapor-gui[.exe] --mode installer
     └── shell -> vapor[.exe]
         └── recovery uses vapor-launch.sh or vapor-launch.cmd

@@ -77,6 +77,89 @@ fn launch_terminal(
     wait_for_terminal(command, "Konsole", log)
 }
 
+#[cfg(target_os = "linux")]
+fn launch_terminal_command(
+    app_root: &Path,
+    working_directory: &Path,
+    program: &Path,
+    arguments: &[OsString],
+    log: &mut EntryLog,
+) -> Result<ExitStatus, String> {
+    if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
+        let message = "terminal launch requires DISPLAY or WAYLAND_DISPLAY".to_owned();
+        log.write(&message);
+        return Err(message);
+    }
+
+    let host_konsole = is_steam_pressure_vessel()
+        .then(|| Path::new("/run/host/usr/bin/konsole"))
+        .filter(|path| path.is_file());
+    let mut command = if let (Some(konsole), Some(loader)) = (host_konsole, host_loader()) {
+        log.write(format!("launching through host Konsole: {}", program.display()));
+        let mut command = Command::new(loader);
+        command
+            .arg("--library-path")
+            .arg(host_library_path())
+            .arg(konsole)
+            .args(["--nofork", "--hold", "-p", "tabtitle=Vapor"])
+            .arg("--workdir")
+            .arg(working_directory)
+            .arg("-e")
+            .arg("/usr/bin/env")
+            .arg(format!("PATH={}", linux_child_path(app_root)))
+            .arg(program)
+            .args(arguments)
+            .current_dir(working_directory)
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
+            .env_remove("LD_AUDIT")
+            .env_remove("STEAM_RUNTIME_LIBRARY_PATH")
+            .env(
+                "PATH",
+                format!(
+                    "/run/host/usr/local/bin:/run/host/usr/bin:/run/host/bin:{}",
+                    env::var_os("PATH").unwrap_or_else(|| OsString::from("/usr/bin:/bin"))
+                        .to_string_lossy()
+                ),
+            )
+            .env(
+                "QT_PLUGIN_PATH",
+                "/run/host/usr/lib/qt6/plugins:/run/host/usr/lib/x86_64-linux-gnu/qt6/plugins",
+            )
+            .env(
+                "XDG_DATA_DIRS",
+                "/run/host/usr/local/share:/run/host/usr/share:/usr/share",
+            );
+        command
+    } else {
+        let konsole = if Path::new("/usr/bin/konsole").is_file() {
+            PathBuf::from("/usr/bin/konsole")
+        } else {
+            PathBuf::from("konsole")
+        };
+        log.write(format!("launching through {}: {}", konsole.display(), program.display()));
+        let mut command = Command::new(konsole);
+        command
+            .args(["--nofork", "--hold", "-p", "tabtitle=Vapor"])
+            .arg("--workdir")
+            .arg(working_directory)
+            .arg("-e")
+            .arg(program)
+            .args(arguments)
+            .current_dir(working_directory)
+            .env("PATH", linux_child_path(app_root));
+        command
+    };
+    if host_konsole.is_none() {
+        command
+            .env_remove("LD_LIBRARY_PATH")
+            .env_remove("LD_PRELOAD")
+            .env_remove("LD_AUDIT")
+            .env_remove("STEAM_RUNTIME_LIBRARY_PATH");
+    }
+    wait_for_terminal(command, "terminal window", log)
+}
+
 #[cfg(windows)]
 fn launch_terminal(
     app_root: &Path,
@@ -100,6 +183,39 @@ fn launch_terminal(
         .raw_arg(payload)
         .current_dir(app_root);
     wait_for_terminal(command, "Command Prompt", log)
+}
+
+#[cfg(windows)]
+fn launch_terminal_command(
+    _app_root: &Path,
+    working_directory: &Path,
+    program: &Path,
+    arguments: &[OsString],
+    log: &mut EntryLog,
+) -> Result<ExitStatus, String> {
+    let shell = env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe"));
+    log.write(format!("launching terminal program {}", program.display()));
+    let payload = windows_command_payload(program, arguments);
+    let mut command = Command::new(shell);
+    command
+        .args(["/D", "/C"])
+        .raw_arg(payload)
+        .current_dir(working_directory);
+    wait_for_terminal(command, "Command Prompt", log)
+}
+
+#[cfg(windows)]
+fn windows_command_payload(program: &Path, arguments: &[OsString]) -> String {
+    let mut command = if program.extension().is_some_and(|extension| extension == "cmd") {
+        format!("call {}", quote_windows_cmd_part(program.as_os_str()))
+    } else {
+        quote_windows_cmd_part(program.as_os_str())
+    };
+    for argument in arguments {
+        command.push(' ');
+        command.push_str(&quote_windows_cmd_part(argument));
+    }
+    format!("\"{command}\"")
 }
 
 #[cfg(windows)]
@@ -134,6 +250,22 @@ fn quote_windows_cmd_part(value: &OsStr) -> String {
 fn launch_terminal(
     _app_root: &Path,
     _script: &Path,
+    _arguments: &[OsString],
+    log: &mut EntryLog,
+) -> Result<ExitStatus, String> {
+    let message = format!(
+        "vapor-entrypoint has no terminal adapter for {}",
+        env::consts::OS
+    );
+    log.write(&message);
+    Err(message)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn launch_terminal_command(
+    _app_root: &Path,
+    _working_directory: &Path,
+    _program: &Path,
     _arguments: &[OsString],
     log: &mut EntryLog,
 ) -> Result<ExitStatus, String> {

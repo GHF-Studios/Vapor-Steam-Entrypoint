@@ -51,11 +51,25 @@ fn run() -> Result<ExitStatus, String> {
         redacted_arguments(&arguments)
     ));
 
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "terminal")
+    {
+        let (working_directory, program, forwarded) = terminal_request(&arguments)?;
+        return launch_terminal_command(
+            &app_root,
+            &working_directory,
+            &program,
+            &forwarded,
+            &mut log,
+        );
+    }
+
     if starts_gui(&arguments) {
         if arguments
             .first()
             .is_some_and(|argument| argument == "installer")
-            && !gui_executable(&executable).is_file()
+            && !gui_executable(&executable, false).is_file()
         {
             let script = platform_script(&app_root);
             if !script.is_file() {
@@ -67,7 +81,12 @@ fn run() -> Result<ExitStatus, String> {
             return launch_terminal(&app_root, &script, &arguments, &mut log);
         }
         if requires_client_service(&arguments) {
-            ensure_client_service(&executable, &app_root, &mut log)?;
+            ensure_client_service(
+                &executable,
+                &app_root,
+                arguments.first().is_some_and(|argument| argument == "play"),
+                &mut log,
+            )?;
         } else {
             log.write("launching Installer without the shared service for recovery access");
         }
@@ -82,7 +101,7 @@ fn run() -> Result<ExitStatus, String> {
         return Err(message);
     }
 
-    ensure_client_service(&executable, &app_root, &mut log)?;
+    ensure_client_service(&executable, &app_root, false, &mut log)?;
     launch_terminal(&app_root, &script, &arguments, &mut log)
 }
 
@@ -109,10 +128,34 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     }
 }
 
+fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsString>), String> {
+    if arguments.len() < 5 || arguments[1] != "--working-directory" || arguments[3] != "--" {
+        return Err(
+            "terminal launch expects: terminal --working-directory PATH -- PROGRAM [ARGS...]"
+                .to_owned(),
+        );
+    }
+    let working_directory = PathBuf::from(&arguments[2]);
+    if !working_directory.is_dir() {
+        return Err(format!(
+            "terminal launch working directory does not exist: {}",
+            working_directory.display()
+        ));
+    }
+    let program = PathBuf::from(&arguments[4]);
+    if !program.is_file() {
+        return Err(format!(
+            "terminal launch program does not exist: {}",
+            program.display()
+        ));
+    }
+    Ok((working_directory, program, arguments[5..].to_vec()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::requires_client_service;
-    use std::ffi::OsString;
+    use super::{requires_client_service, terminal_request};
+    use std::{ffi::OsString, path::PathBuf};
 
     #[test]
     fn installer_can_start_without_the_shared_service() {
@@ -125,11 +168,29 @@ mod tests {
             assert!(requires_client_service(&[OsString::from(mode)]));
         }
     }
+
+    #[test]
+    fn terminal_request_requires_an_existing_working_directory_and_program() {
+        let arguments = [
+            OsString::from("terminal"),
+            OsString::from("--working-directory"),
+            OsString::from("/tmp"),
+            OsString::from("--"),
+            OsString::from("/bin/true"),
+            OsString::from("argument"),
+        ];
+        let (working_directory, program, forwarded) = terminal_request(&arguments).unwrap();
+        assert_eq!(working_directory, PathBuf::from("/tmp"));
+        assert_eq!(program, PathBuf::from("/bin/true"));
+        assert_eq!(forwarded, [OsString::from("argument")]);
+        assert!(terminal_request(&arguments[..4]).is_err());
+    }
 }
 
 fn ensure_client_service(
     entrypoint: &Path,
     app_root: &Path,
+    player_frontend: bool,
     log: &mut EntryLog,
 ) -> Result<(), String> {
     let service = entrypoint
@@ -145,7 +206,7 @@ fn ensure_client_service(
         log.write(&message);
         return Err(format!("{message}; repair or locally deploy Vapor Client"));
     }
-    let application_executable = gui_executable(entrypoint);
+    let application_executable = gui_executable(entrypoint, player_frontend);
     log.write(format!(
         "ensuring shared Vapor Client service from {}",
         service.display()
@@ -168,15 +229,17 @@ fn ensure_client_service(
     Ok(())
 }
 
-fn gui_executable(entrypoint: &Path) -> PathBuf {
+fn gui_executable(entrypoint: &Path, player_frontend: bool) -> PathBuf {
+    let executable = match (player_frontend, cfg!(windows)) {
+        (true, true) => "vapor-launcher.exe",
+        (true, false) => "vapor-launcher",
+        (false, true) => "vapor-gui.exe",
+        (false, false) => "vapor-gui",
+    };
     entrypoint
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(if cfg!(windows) {
-            "vapor-gui.exe"
-        } else {
-            "vapor-gui"
-        })
+        .join(executable)
 }
 
 fn launch_gui(
@@ -185,15 +248,23 @@ fn launch_gui(
     arguments: &[OsString],
     log: &mut EntryLog,
 ) -> Result<ExitStatus, String> {
-    let executable = gui_executable(entrypoint);
+    let player_frontend = arguments
+        .windows(2)
+        .any(|pair| pair[0] == "--mode" && pair[1] == "play");
+    let executable = gui_executable(entrypoint, player_frontend);
+    let product = if player_frontend {
+        "Vapor Launcher"
+    } else {
+        "Vapor GUI"
+    };
     if !executable.is_file() {
-        let message = format!("Vapor GUI is missing: {}", executable.display());
+        let message = format!("{product} is missing: {}", executable.display());
         log.write(&message);
         return Err(format!(
             "{message}; build and deploy the Vapor Client workspace"
         ));
     }
-    log.write(format!("launching Vapor GUI {}", executable.display()));
+    log.write(format!("launching {product} {}", executable.display()));
     let mut command = Command::new(executable);
     command
         .args(arguments)
@@ -201,8 +272,8 @@ fn launch_gui(
         .env("VAPOR_HOME", app_root);
     let status = command
         .status()
-        .map_err(|error| format!("failed to launch Vapor GUI: {error}"))?;
-    log.write(format!("Vapor GUI exited with {status}"));
+        .map_err(|error| format!("failed to launch {product}: {error}"))?;
+    log.write(format!("{product} exited with {status}"));
     Ok(status)
 }
 
@@ -247,7 +318,7 @@ mod launch_mode_tests {
     }
 
     #[test]
-    fn play_opens_studio_gui_in_direct_play_mode() {
+    fn play_uses_the_dedicated_launcher_binary() {
         let arguments = [OsString::from("play")];
         assert!(starts_gui(&arguments));
         assert_eq!(
@@ -267,8 +338,17 @@ mod launch_mode_tests {
         };
 
         assert_eq!(
-            gui_executable(entrypoint),
+            gui_executable(entrypoint, false),
             entrypoint.parent().unwrap().join(expected_name)
+        );
+        let launcher_name = if cfg!(windows) {
+            "vapor-launcher.exe"
+        } else {
+            "vapor-launcher"
+        };
+        assert_eq!(
+            gui_executable(entrypoint, true),
+            entrypoint.parent().unwrap().join(launcher_name)
         );
     }
 }
