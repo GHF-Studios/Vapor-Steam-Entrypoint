@@ -1,6 +1,6 @@
 //! Steam-facing entrypoint for Vapor's player and creator modes.
 //!
-//! A launch without arguments starts the app's default playable composition.
+//! A launch without arguments starts the persistently selected composition.
 //! The `chooser` mode exposes the Launcher and creator tools; `shell` and
 //! `installer` retain recovery paths.
 
@@ -86,7 +86,7 @@ fn run() -> Result<ExitStatus, String> {
             );
         }
         ensure_client_service(&executable, &app_root, "game", &mut log)?;
-        return launch_default_composition(&executable, &app_root, &mut log);
+        return launch_selected_composition(&executable, &app_root, &mut log);
     }
 
     if starts_gui(&arguments) {
@@ -172,7 +172,7 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     }
 }
 
-fn launch_default_composition(
+fn launch_selected_composition(
     entrypoint: &Path,
     app_root: &Path,
     log: &mut EntryLog,
@@ -185,7 +185,7 @@ fn launch_default_composition(
     }
 
     log.write(format!(
-        "launching the default playable composition through {}",
+        "launching the persistent selected composition through {}",
         executable.display()
     ));
     let output = log.stderr().ok_or_else(|| {
@@ -196,7 +196,7 @@ fn launch_default_composition(
     })?;
     let mut command = Command::new(&executable);
     command
-        .args(["launch", "default"])
+        .args(["launch", "selected"])
         .current_dir(app_root)
         .env("VAPOR_HOME", app_root)
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
@@ -206,8 +206,8 @@ fn launch_default_composition(
 
     let status = command
         .status()
-        .map_err(|error| format!("failed to launch the default composition: {error}"))?;
-    log.write(format!("default composition launch exited with {status}"));
+        .map_err(|error| format!("failed to launch the selected composition: {error}"))?;
+    log.write(format!("selected composition launch exited with {status}"));
     Ok(status)
 }
 
@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn default_entrypoint_launches_the_default_composition() {
+    fn default_entrypoint_launches_the_persistent_selection() {
         assert!(!starts_gui(&[]));
         assert!(requires_client_service(&[]));
         assert_eq!(entrypoint_mode(&[]), "game");
