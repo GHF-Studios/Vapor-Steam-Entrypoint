@@ -5,7 +5,18 @@ struct EntryLog {
 
 impl EntryLog {
     fn open(app_root: &Path) -> Self {
-        let directory = app_root.join(".vapor/logs");
+        let home = std::env::var_os("VAPOR_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                #[cfg(windows)]
+                let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+                #[cfg(not(windows))]
+                let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+                home.map(PathBuf::from).map(|home| home.join("Vapor"))
+            })
+            .unwrap_or_else(|| app_root.to_path_buf());
+        let directory = home.join("data/logs");
         let path = directory.join("entrypoint.log");
         let file = fs::create_dir_all(&directory).ok().and_then(|_| {
             OpenOptions::new()

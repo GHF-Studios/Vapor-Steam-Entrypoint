@@ -1,10 +1,12 @@
 # Vapor Steam Entrypoint
 
-Vapor Steam Entrypoint adapts Steam launches to the installed Vapor app. Its
-default launch starts the app manifest's default playable composition directly.
-The optional `chooser` route opens Launcher, Studio, IDE, Installer, and Shell.
+This is a Vapor-owned external launch adapter prototype. It is intended to
+live under Vapor home and is not part of the Loo-Cast Steam content mount.
+The current content-only Steam depot layout does not yet provide a direct
+Steam launch-option handoff to this executable; that integration needs a
+separate mechanism outside the Steam product payload.
 
-Steam has two intended launch choices per target:
+The eventual Vapor-owned launch choices for a mounted Loo-Cast product are:
 
 | Choice | Linux target | Windows target |
 | --- | --- | --- |
@@ -19,7 +21,7 @@ also retains its recovery route when the shared service cannot start.
 Runtime paths:
 
 ```text
-Steam
+<Vapor home>
 └── bin/<target>/vapor-entrypoint[.exe]
     ├── (no arguments) -> vapor[.exe] launch default
     ├── chooser -> vapor-gui[.exe] --mode chooser
@@ -32,7 +34,12 @@ Steam
     └── shell -> terminal -> vapor[.exe]
 ```
 
-Entrypoint logs go to `<app-root>/.vapor/logs/entrypoint.log`.
+The entrypoint discovers Vapor under `%USERPROFILE%\\Vapor` on Windows or
+`$HOME/Vapor` on Linux. `VAPOR_HOME` may select a custom standalone install.
+The Steam app root is a mounted content source. It contains `App.vapor.toml`
+and the three first-party content items, with no Vapor binaries or mutable
+runtime state. Entrypoint logs go to
+`<vapor-home>/data/logs/entrypoint.log`.
 
 This project owns app-root discovery, game and GUI handoff, terminal recovery
 launches, argument forwarding, and entrypoint logging. Vapor owns shared
