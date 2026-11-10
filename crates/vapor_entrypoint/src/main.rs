@@ -26,6 +26,7 @@ fn main() {
         Ok(status) => status.code().unwrap_or(1),
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "vapor-entrypoint: {error}");
+            show_user_error("Vapor could not start", &error);
             1
         }
     };
@@ -35,19 +36,24 @@ fn main() {
 fn run() -> Result<ExitStatus, String> {
     let executable = env::current_exe()
         .map_err(|error| format!("failed to resolve vapor-entrypoint executable: {error}"))?;
-    let app_root = discover_app_root(&executable).ok_or_else(|| {
+    let steam_root = discover_app_root(&executable).ok_or_else(|| {
         format!(
-            "could not discover app root from executable '{}'",
+            "could not discover Steam product root from executable '{}'",
             executable.display()
         )
     })?;
-    let app_root = shell_safe_app_root(app_root);
-    let mut log = EntryLog::open(&app_root);
+    let steam_root = shell_safe_app_root(steam_root);
+    let vapor_home = discover_vapor_home().ok_or_else(|| {
+        "Vapor is not installed or its Vapor Home could not be found. Install Vapor from https://vapor.ghf-studios.site/ and try again.".to_owned()
+    })?;
+    let vapor_home = shell_safe_app_root(vapor_home);
+    let mut log = EntryLog::open(&vapor_home);
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     log.write(format!(
-        "entrypoint executable={} app_root={} args={:?}",
+        "entrypoint executable={} steam_root={} vapor_home={} args={:?}",
         executable.display(),
-        app_root.display(),
+        steam_root.display(),
+        vapor_home.display(),
         redacted_arguments(&arguments)
     ));
 
@@ -57,7 +63,7 @@ fn run() -> Result<ExitStatus, String> {
     {
         let (working_directory, program, forwarded) = terminal_request(&arguments)?;
         return launch_terminal_command(
-            &app_root,
+            &vapor_home,
             &working_directory,
             &program,
             &forwarded,
@@ -72,55 +78,54 @@ fn run() -> Result<ExitStatus, String> {
             .first()
             .is_some_and(|argument| argument == "play" || argument == "game")
     {
-        if !player_setup_ready(&app_root) {
+        if !player_setup_ready(&vapor_home) {
             log.write("player setup is missing; opening the required first-launch setup");
             let onboarding = [
                 OsString::from("installer"),
                 OsString::from("--first-launch"),
             ];
             return launch_gui(
-                &executable,
-                &app_root,
+                &vapor_home,
                 &gui_arguments(&onboarding),
                 &mut log,
             );
         }
-        ensure_client_service(&executable, &app_root, "game", &mut log)?;
-        return launch_selected_composition(&executable, &app_root, &mut log);
+        ensure_client_service(&vapor_home, "game", &mut log)?;
+        return launch_selected_composition(&vapor_home, &mut log);
     }
 
     if starts_gui(&arguments) {
         let mode = entrypoint_mode(&arguments);
-        if mode == "installer" && !application_executable(&executable, &mode).is_file() {
-            let script = platform_script(&app_root);
+        if mode == "installer" && !application_executable(&vapor_home, &mode).is_file() {
+            let script = platform_script(&vapor_home);
             if !script.is_file() {
                 return Err(format!(
                     "installer fallback script is missing: {}",
                     script.display()
                 ));
             }
-            return launch_terminal(&app_root, &script, &arguments, &mut log);
+            return launch_terminal(&vapor_home, &script, &arguments, &mut log);
         }
         if requires_client_service(&arguments) {
-            ensure_client_service(&executable, &app_root, &mode, &mut log)?;
+            ensure_client_service(&vapor_home, &mode, &mut log)?;
         } else {
             log.write(format!(
                 "launching {mode} without the shared service bootstrap"
             ));
         }
         let gui_arguments = gui_arguments(&arguments);
-        return launch_gui(&executable, &app_root, &gui_arguments, &mut log);
+        return launch_gui(&vapor_home, &gui_arguments, &mut log);
     }
 
-    let script = platform_script(&app_root);
+    let script = platform_script(&vapor_home);
     if !script.is_file() {
         let message = format!("launch script is missing: {}", script.display());
         log.write(&message);
         return Err(message);
     }
 
-    ensure_client_service(&executable, &app_root, "shell", &mut log)?;
-    launch_terminal(&app_root, &script, &arguments, &mut log)
+    ensure_client_service(&vapor_home, "shell", &mut log)?;
+    launch_terminal(&vapor_home, &script, &arguments, &mut log)
 }
 
 fn starts_gui(arguments: &[OsString]) -> bool {
@@ -173,11 +178,10 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
 }
 
 fn launch_selected_composition(
-    entrypoint: &Path,
-    app_root: &Path,
+    vapor_home: &Path,
     log: &mut EntryLog,
 ) -> Result<ExitStatus, String> {
-    let executable = application_executable(entrypoint, "game");
+    let executable = application_executable(vapor_home, "game");
     if !executable.is_file() {
         let message = format!("Vapor runtime is missing: {}", executable.display());
         log.write(&message);
@@ -197,8 +201,8 @@ fn launch_selected_composition(
     let mut command = Command::new(&executable);
     command
         .args(["launch", "selected"])
-        .current_dir(app_root)
-        .env("VAPOR_HOME", app_root)
+        .current_dir(vapor_home)
+        .env("VAPOR_HOME", vapor_home)
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
         .stderr(output);
     #[cfg(windows)]
@@ -357,25 +361,21 @@ mod tests {
 }
 
 fn ensure_client_service(
-    entrypoint: &Path,
-    app_root: &Path,
+    vapor_home: &Path,
     mode: &str,
     log: &mut EntryLog,
 ) -> Result<(), String> {
-    let service = entrypoint
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(if cfg!(windows) {
-            "vapor-client-service.exe"
-        } else {
-            "vapor-client-service"
-        });
+    let service = runtime_bin_directory(vapor_home).join(if cfg!(windows) {
+        "vapor-client-service.exe"
+    } else {
+        "vapor-client-service"
+    });
     if !service.is_file() {
         let message = format!("Vapor Client service is missing: {}", service.display());
         log.write(&message);
         return Err(format!("{message}; repair or locally deploy Vapor Client"));
     }
-    let application_executable = application_executable(entrypoint, mode);
+    let application_executable = application_executable(vapor_home, mode);
     log.write(format!(
         "ensuring shared Vapor Client service from {}",
         service.display()
@@ -387,8 +387,8 @@ fn ensure_client_service(
         .arg(&application_executable)
         .arg("--workshop-app-id")
         .arg("2122620")
-        .current_dir(app_root)
-        .env("VAPOR_HOME", app_root);
+        .current_dir(vapor_home)
+        .env("VAPOR_HOME", vapor_home);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let status = command
@@ -402,7 +402,7 @@ fn ensure_client_service(
     Ok(())
 }
 
-fn application_executable(entrypoint: &Path, mode: &str) -> PathBuf {
+fn application_executable(vapor_home: &Path, mode: &str) -> PathBuf {
     let base_name = match mode {
         "game" | "play" | "shell" => "vapor",
         "launcher" => "vapor-launcher",
@@ -413,15 +413,11 @@ fn application_executable(entrypoint: &Path, mode: &str) -> PathBuf {
         _ => "vapor",
     };
     let executable = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
-    entrypoint
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(executable)
+    runtime_bin_directory(vapor_home).join(executable)
 }
 
 fn launch_gui(
-    entrypoint: &Path,
-    app_root: &Path,
+    vapor_home: &Path,
     arguments: &[OsString],
     log: &mut EntryLog,
 ) -> Result<ExitStatus, String> {
@@ -430,7 +426,7 @@ fn launch_gui(
         .find(|pair| pair[0] == "--mode")
         .map(|pair| pair[1].to_string_lossy().into_owned())
         .unwrap_or_else(|| "chooser".to_owned());
-    let executable = application_executable(entrypoint, &mode);
+    let executable = application_executable(vapor_home, &mode);
     let product = match mode.as_str() {
         "play" | "launcher" => "Vapor Launcher",
         "studio" => "Vapor Studio",
@@ -449,8 +445,8 @@ fn launch_gui(
     let mut command = Command::new(executable);
     command
         .args(arguments)
-        .current_dir(app_root)
-        .env("VAPOR_HOME", app_root);
+        .current_dir(vapor_home)
+        .env("VAPOR_HOME", vapor_home);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let status = command
@@ -467,7 +463,7 @@ include!("entrypoint/log.rs");
 
 #[cfg(test)]
 mod launch_mode_tests {
-    use super::{application_executable, gui_arguments, starts_gui};
+    use super::{application_executable, gui_arguments, runtime_bin_directory, starts_gui};
     use std::ffi::OsString;
 
     #[test]
@@ -518,9 +514,8 @@ mod launch_mode_tests {
     }
 
     #[test]
-    fn each_gui_product_is_resolved_as_an_entrypoint_sibling() {
-        let entrypoint =
-            std::path::Path::new("/vapor/bin/x86_64-pc-windows-gnullvm/vapor-entrypoint.exe");
+    fn each_gui_product_is_resolved_under_the_installed_vapor_home() {
+        let home = std::path::Path::new("/vapor");
         for (mode, base_name) in [
             ("play", "vapor"),
             ("game", "vapor"),
@@ -532,8 +527,8 @@ mod launch_mode_tests {
         ] {
             let name = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
             assert_eq!(
-                application_executable(entrypoint, mode),
-                entrypoint.parent().unwrap().join(name)
+                application_executable(home, mode),
+                runtime_bin_directory(home).join(name)
             );
         }
     }

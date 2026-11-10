@@ -4,8 +4,8 @@ struct EntryLog {
 }
 
 impl EntryLog {
-    fn open(app_root: &Path) -> Self {
-        let directory = app_root.join(".vapor/logs");
+    fn open(vapor_home: &Path) -> Self {
+        let directory = vapor_home.join("data/logs");
         let path = directory.join("entrypoint.log");
         let file = fs::create_dir_all(&directory).ok().and_then(|_| {
             OpenOptions::new()
