@@ -1,85 +1,7 @@
 #[cfg(target_os = "linux")]
-fn launch_terminal(
-    app_root: &Path,
-    script: &Path,
-    arguments: &[OsString],
-    log: &mut EntryLog,
-) -> Result<ExitStatus, String> {
-    if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
-        let message = "Konsole launch requires DISPLAY or WAYLAND_DISPLAY".to_owned();
-        log.write(&message);
-        return Err(message);
-    }
-
-    if is_steam_pressure_vessel() && Path::new("/run/host/usr/bin/konsole").is_file() {
-        if let Some(loader) = host_loader() {
-            log.write(format!(
-                "launching host Konsole through loader {}",
-                loader.display()
-            ));
-            let mut command = Command::new(loader);
-            command
-                .arg("--library-path")
-                .arg(host_library_path())
-                .arg("/run/host/usr/bin/konsole")
-                .args(["--nofork", "--hold", "-p", "tabtitle=Vapor"])
-                .arg("--workdir")
-                .arg(app_root)
-                .arg("-e")
-                .arg("/usr/bin/env")
-                .arg(format!("PATH={}", linux_child_path(app_root)))
-                .arg(script)
-                .arg("--hold")
-                .args(arguments)
-                .current_dir(app_root)
-                .env_remove("LD_LIBRARY_PATH")
-                .env_remove("LD_PRELOAD")
-                .env_remove("LD_AUDIT")
-                .env_remove("STEAM_RUNTIME_LIBRARY_PATH")
-                .env(
-                    "PATH",
-                    format!(
-                        "/run/host/usr/local/bin:/run/host/usr/bin:/run/host/bin:{}",
-                        env::var_os("PATH")
-                            .unwrap_or_else(|| OsString::from("/usr/bin:/bin"))
-                            .to_string_lossy()
-                    ),
-                )
-                .env(
-                    "QT_PLUGIN_PATH",
-                    "/run/host/usr/lib/qt6/plugins:/run/host/usr/lib/x86_64-linux-gnu/qt6/plugins",
-                )
-                .env(
-                    "XDG_DATA_DIRS",
-                    "/run/host/usr/local/share:/run/host/usr/share:/usr/share",
-                );
-            return wait_for_terminal(command, "host Konsole", log);
-        }
-        log.write("host Konsole exists but no /run/host dynamic loader was found");
-    }
-
-    let konsole = if Path::new("/usr/bin/konsole").is_file() {
-        PathBuf::from("/usr/bin/konsole")
-    } else {
-        PathBuf::from("konsole")
-    };
-    log.write(format!("launching Konsole through {}", konsole.display()));
-    let mut command = Command::new(konsole);
-    command
-        .args(["--nofork", "--hold", "-p", "tabtitle=Vapor"])
-        .arg("--workdir")
-        .arg(app_root)
-        .arg("-e")
-        .arg(script)
-        .arg("--hold")
-        .args(arguments)
-        .current_dir(app_root);
-    wait_for_terminal(command, "Konsole", log)
-}
-
-#[cfg(target_os = "linux")]
 fn launch_terminal_command(
-    app_root: &Path,
+    vapor_home: &Path,
+    product_root: &Path,
     working_directory: &Path,
     program: &Path,
     arguments: &[OsString],
@@ -106,7 +28,9 @@ fn launch_terminal_command(
             .arg(working_directory)
             .arg("-e")
             .arg("/usr/bin/env")
-            .arg(format!("PATH={}", linux_child_path(app_root)))
+            .arg(format!("PATH={}", linux_child_path(vapor_home)))
+            .arg(format!("VAPOR_HOME={}", vapor_home.display()))
+            .arg(format!("VAPOR_PRODUCT_ROOT={}", product_root.display()))
             .arg(program)
             .args(arguments)
             .current_dir(working_directory)
@@ -129,7 +53,9 @@ fn launch_terminal_command(
             .env(
                 "XDG_DATA_DIRS",
                 "/run/host/usr/local/share:/run/host/usr/share:/usr/share",
-            );
+            )
+            .env("VAPOR_HOME", vapor_home)
+            .env("VAPOR_PRODUCT_ROOT", product_root);
         command
     } else {
         let konsole = if Path::new("/usr/bin/konsole").is_file() {
@@ -147,7 +73,9 @@ fn launch_terminal_command(
             .arg(program)
             .args(arguments)
             .current_dir(working_directory)
-            .env("PATH", linux_child_path(app_root));
+            .env("PATH", linux_child_path(vapor_home))
+            .env("VAPOR_HOME", vapor_home)
+            .env("VAPOR_PRODUCT_ROOT", product_root);
         command
     };
     if host_konsole.is_none() {
@@ -161,33 +89,9 @@ fn launch_terminal_command(
 }
 
 #[cfg(windows)]
-fn launch_terminal(
-    app_root: &Path,
-    _script: &Path,
-    arguments: &[OsString],
-    log: &mut EntryLog,
-) -> Result<ExitStatus, String> {
-    let shell = env::var_os("ComSpec").unwrap_or_else(|| OsString::from("cmd.exe"));
-    log.write(format!(
-        "launching command prompt through {}",
-        PathBuf::from(&shell).display()
-    ));
-    let payload = windows_cmd_payload(arguments);
-    log.write(format!(
-        "command prompt args={:?}",
-        redacted_arguments(arguments)
-    ));
-    let mut command = Command::new(shell);
-    command
-        .args(["/D", "/C"])
-        .raw_arg(payload)
-        .current_dir(app_root);
-    wait_for_terminal(command, "Command Prompt", log)
-}
-
-#[cfg(windows)]
 fn launch_terminal_command(
-    _app_root: &Path,
+    vapor_home: &Path,
+    product_root: &Path,
     working_directory: &Path,
     program: &Path,
     arguments: &[OsString],
@@ -200,7 +104,9 @@ fn launch_terminal_command(
     command
         .args(["/D", "/C"])
         .raw_arg(payload)
-        .current_dir(working_directory);
+        .current_dir(working_directory)
+        .env("VAPOR_HOME", vapor_home)
+        .env("VAPOR_PRODUCT_ROOT", product_root);
     wait_for_terminal(command, "Command Prompt", log)
 }
 
@@ -211,20 +117,6 @@ fn windows_command_payload(program: &Path, arguments: &[OsString]) -> String {
     } else {
         quote_windows_cmd_part(program.as_os_str())
     };
-    for argument in arguments {
-        command.push(' ');
-        command.push_str(&quote_windows_cmd_part(argument));
-    }
-    format!("\"{command}\"")
-}
-
-#[cfg(windows)]
-fn windows_cmd_payload(arguments: &[OsString]) -> String {
-    let mut command = format!(
-        "call {} {}",
-        quote_windows_cmd_part(OsStr::new(r"bin\vapor-launch.cmd")),
-        quote_windows_cmd_part(OsStr::new("--hold"))
-    );
     for argument in arguments {
         command.push(' ');
         command.push_str(&quote_windows_cmd_part(argument));
@@ -247,23 +139,9 @@ fn quote_windows_cmd_part(value: &OsStr) -> String {
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn launch_terminal(
-    _app_root: &Path,
-    _script: &Path,
-    _arguments: &[OsString],
-    log: &mut EntryLog,
-) -> Result<ExitStatus, String> {
-    let message = format!(
-        "vapor-entrypoint has no terminal adapter for {}",
-        env::consts::OS
-    );
-    log.write(&message);
-    Err(message)
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
 fn launch_terminal_command(
     _app_root: &Path,
+    _product_root: &Path,
     _working_directory: &Path,
     _program: &Path,
     _arguments: &[OsString],
@@ -322,16 +200,16 @@ fn host_library_path() -> &'static std::ffi::OsStr {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_child_path(app_root: &Path) -> String {
+fn linux_child_path(vapor_home: &Path) -> String {
     let mut paths = vec![
-        app_root.join("bin/x86_64-unknown-linux-gnu"),
-        app_root.join("bin"),
+        vapor_home.join("bin/x86_64-unknown-linux-gnu"),
+        vapor_home.join("bin"),
         PathBuf::from("/usr/bin"),
         PathBuf::from("/bin"),
     ];
     if let Some(existing) = env::var_os("PATH") {
         paths.extend(
-            env::split_paths(&existing).filter(|path| !is_raw_app_tool_path(app_root, path)),
+            env::split_paths(&existing).filter(|path| !is_raw_app_tool_path(vapor_home, path)),
         );
     }
     env::join_paths(paths)
@@ -341,18 +219,18 @@ fn linux_child_path(app_root: &Path) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn is_raw_app_tool_path(app_root: &Path, path: &Path) -> bool {
+fn is_raw_app_tool_path(vapor_home: &Path, path: &Path) -> bool {
     let raw_exact = [
-        app_root.join("cargo-home/bin"),
-        app_root.join("rustup/bin"),
-        app_root.join("tools/steamcmd"),
-        app_root.join("tools/zig"),
-        app_root.join("tools/cross/bin"),
-        app_root.join("tools/llvm-mingw/bin"),
+        vapor_home.join("tools/cargo/bin"),
+        vapor_home.join("tools/rustup/bin"),
+        vapor_home.join("tools/steamcmd"),
+        vapor_home.join("tools/zig"),
+        vapor_home.join("tools/cross/bin"),
+        vapor_home.join("tools/llvm-mingw/bin"),
     ];
     if raw_exact.iter().any(|raw| path == raw) {
         return true;
     }
-    let toolchains = app_root.join("rustup-home/toolchains");
+    let toolchains = vapor_home.join("tools/rustup/home/toolchains");
     path.starts_with(&toolchains) && path.file_name().is_some_and(|name| name == "bin")
 }
