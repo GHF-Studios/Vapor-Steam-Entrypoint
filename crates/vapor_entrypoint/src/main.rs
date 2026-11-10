@@ -130,6 +130,7 @@ fn starts_gui(arguments: &[OsString]) -> bool {
             || argument == "chooser"
             || argument == "installer"
             || argument == "ide"
+            || argument == "cleanup"
     })
 }
 
@@ -152,7 +153,7 @@ fn player_setup_ready(app_root: &Path) -> bool {
 fn requires_client_service(arguments: &[OsString]) -> bool {
     !arguments
         .first()
-        .is_some_and(|argument| argument == "installer" || argument == "chooser")
+        .is_some_and(|argument| argument == "installer" || argument == "chooser" || argument == "cleanup")
 }
 
 fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
@@ -162,7 +163,8 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
                 || mode == "launcher"
                 || mode == "chooser"
                 || mode == "installer"
-                || mode == "ide" =>
+                || mode == "ide"
+                || mode == "cleanup" =>
         {
             let mut forwarded = vec![OsString::from("--mode"), OsString::from(mode.as_ref())];
             forwarded.extend_from_slice(&arguments[1..]);
@@ -409,7 +411,7 @@ fn application_executable(entrypoint: &Path, mode: &str) -> PathBuf {
         "studio" => "vapor-studio",
         "ide" => "vapor-ide",
         "installer" => "vapor-installer-gui",
-        "chooser" => "vapor-gui",
+        "chooser" | "cleanup" => "vapor-gui",
         _ => "vapor",
     };
     let executable = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
@@ -436,6 +438,7 @@ fn launch_gui(
         "studio" => "Vapor Studio",
         "ide" => "Vapor IDE",
         "installer" => "Vapor Installer",
+        "cleanup" => "Vapor Cleanup",
         _ => "Vapor chooser",
     };
     if !executable.is_file() {
