@@ -145,8 +145,8 @@ fn entrypoint_mode(arguments: &[OsString]) -> String {
         .unwrap_or_else(|| "game".to_owned())
 }
 
-fn player_setup_ready(app_root: &Path) -> bool {
-    let receipt = app_root.join(".vapor/state/installer/player.toml");
+fn player_setup_ready(vapor_home: &Path) -> bool {
+    let receipt = vapor_home.join("data/state/installer/player.toml");
     fs::read_to_string(receipt).ok().is_some_and(|source| {
         source
             .lines()
@@ -327,20 +327,20 @@ mod tests {
 
     #[test]
     fn player_setup_is_ready_only_when_the_vapor_receipt_says_ready() {
-        let app_root = std::env::temp_dir().join(format!(
+        let vapor_home = std::env::temp_dir().join(format!(
             "vapor-entrypoint-player-setup-{}",
             std::process::id()
         ));
-        let receipt = app_root.join(".vapor/state/installer/player.toml");
+        let receipt = vapor_home.join("data/state/installer/player.toml");
         std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
 
-        assert!(!player_setup_ready(&app_root));
+        assert!(!player_setup_ready(&vapor_home));
         std::fs::write(&receipt, "schema = 1\nstate = \"pending\"\n").unwrap();
-        assert!(!player_setup_ready(&app_root));
+        assert!(!player_setup_ready(&vapor_home));
         std::fs::write(&receipt, "schema = 1\nstate = \"ready\"\n").unwrap();
-        assert!(player_setup_ready(&app_root));
+        assert!(player_setup_ready(&vapor_home));
 
-        std::fs::remove_dir_all(app_root).unwrap();
+        std::fs::remove_dir_all(vapor_home).unwrap();
     }
 
     #[test]
