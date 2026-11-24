@@ -42,7 +42,7 @@ fn run() -> Result<ExitStatus, String> {
         )
     })?;
     let app_root = shell_safe_app_root(app_root);
-    let mut log = EntryLog::open(&app_root);
+    let mut log = EntryLog::open();
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     log.write(format!(
         "entrypoint executable={} app_root={} args={:?}",
@@ -65,28 +65,14 @@ fn run() -> Result<ExitStatus, String> {
         );
     }
 
-    // Steam's primary entrypoint is the game path. Keep it independent of the
-    // chooser and player Launcher so a normal Play click reaches the game.
+    // Steam's primary entrypoint launches the depot-owned default App directly.
+    // Machine integration and role setup are optional Installer concerns.
     if arguments.is_empty()
         || arguments
             .first()
             .is_some_and(|argument| argument == "play" || argument == "game")
     {
-        if !player_setup_ready(&app_root) {
-            log.write("player setup is missing; opening the required first-launch setup");
-            let onboarding = [
-                OsString::from("installer"),
-                OsString::from("--first-launch"),
-            ];
-            return launch_gui(
-                &executable,
-                &app_root,
-                &gui_arguments(&onboarding),
-                &mut log,
-            );
-        }
-        ensure_client_service(&executable, &app_root, "game", &mut log)?;
-        return launch_selected_composition(&executable, &app_root, &mut log);
+        return launch_bundled_default(&executable, &app_root, &mut log);
     }
 
     if starts_gui(&arguments) {
@@ -140,19 +126,10 @@ fn entrypoint_mode(arguments: &[OsString]) -> String {
         .unwrap_or_else(|| "game".to_owned())
 }
 
-fn player_setup_ready(app_root: &Path) -> bool {
-    let receipt = app_root.join(".vapor/state/installer/player.toml");
-    fs::read_to_string(receipt).ok().is_some_and(|source| {
-        source
-            .lines()
-            .any(|line| line.trim() == "state = \"ready\"")
-    })
-}
-
 fn requires_client_service(arguments: &[OsString]) -> bool {
-    !arguments
-        .first()
-        .is_some_and(|argument| argument == "installer" || argument == "chooser")
+    !arguments.first().is_some_and(|argument| {
+        argument == "installer" || argument == "chooser" || argument == "game" || argument == "play"
+    })
 }
 
 fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
@@ -172,7 +149,7 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
     }
 }
 
-fn launch_selected_composition(
+fn launch_bundled_default(
     entrypoint: &Path,
     app_root: &Path,
     log: &mut EntryLog,
@@ -185,7 +162,7 @@ fn launch_selected_composition(
     }
 
     log.write(format!(
-        "launching the persistent selected composition through {}",
+        "launching the bundled default App through {}",
         executable.display()
     ));
     let output = log.stderr().ok_or_else(|| {
@@ -196,7 +173,7 @@ fn launch_selected_composition(
     })?;
     let mut command = Command::new(&executable);
     command
-        .args(["launch", "selected"])
+        .args(["launch", "bundled-default"])
         .current_dir(app_root)
         .env("VAPOR_HOME", app_root)
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
@@ -207,7 +184,7 @@ fn launch_selected_composition(
     let status = command
         .status()
         .map_err(|error| format!("failed to launch the selected composition: {error}"))?;
-    log.write(format!("selected composition launch exited with {status}"));
+    log.write(format!("bundled default launch exited with {status}"));
     Ok(status)
 }
 
@@ -238,8 +215,7 @@ fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsS
 #[cfg(test)]
 mod tests {
     use super::{
-        entrypoint_mode, gui_arguments, player_setup_ready, requires_client_service, starts_gui,
-        terminal_request,
+        entrypoint_mode, gui_arguments, requires_client_service, starts_gui, terminal_request,
     };
     use std::{ffi::OsString, path::PathBuf};
 
@@ -250,15 +226,14 @@ mod tests {
 
     #[test]
     fn normal_frontends_keep_the_shared_service_bootstrap() {
-        for mode in ["studio", "launcher", "shell", "ide", "game"] {
+        for mode in ["studio", "launcher", "shell", "ide"] {
             assert!(requires_client_service(&[OsString::from(mode)]));
         }
     }
 
     #[test]
-    fn default_entrypoint_launches_the_persistent_selection() {
+    fn default_entrypoint_is_the_direct_game_route() {
         assert!(!starts_gui(&[]));
-        assert!(requires_client_service(&[]));
         assert_eq!(entrypoint_mode(&[]), "game");
     }
 
@@ -320,40 +295,6 @@ mod tests {
         assert_eq!(forwarded, [OsString::from("argument")]);
         assert!(terminal_request(&arguments[..4]).is_err());
     }
-
-    #[test]
-    fn player_setup_is_ready_only_when_the_vapor_receipt_says_ready() {
-        let app_root = std::env::temp_dir().join(format!(
-            "vapor-entrypoint-player-setup-{}",
-            std::process::id()
-        ));
-        let receipt = app_root.join(".vapor/state/installer/player.toml");
-        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
-
-        assert!(!player_setup_ready(&app_root));
-        std::fs::write(&receipt, "schema = 1\nstate = \"pending\"\n").unwrap();
-        assert!(!player_setup_ready(&app_root));
-        std::fs::write(&receipt, "schema = 1\nstate = \"ready\"\n").unwrap();
-        assert!(player_setup_ready(&app_root));
-
-        std::fs::remove_dir_all(app_root).unwrap();
-    }
-
-    #[test]
-    fn first_launch_onboarding_is_forwarded_to_the_installer_gui() {
-        let arguments = [
-            OsString::from("installer"),
-            OsString::from("--first-launch"),
-        ];
-        assert_eq!(
-            gui_arguments(&arguments),
-            [
-                OsString::from("--mode"),
-                OsString::from("installer"),
-                OsString::from("--first-launch"),
-            ]
-        );
-    }
 }
 
 fn ensure_client_service(
@@ -405,11 +346,7 @@ fn ensure_client_service(
 fn application_executable(entrypoint: &Path, mode: &str) -> PathBuf {
     let base_name = match mode {
         "game" | "play" | "shell" => "vapor",
-        "launcher" => "vapor-launcher",
-        "studio" => "vapor-studio",
-        "ide" => "vapor-ide",
-        "installer" => "vapor-installer-gui",
-        "chooser" => "vapor-gui",
+        "launcher" | "studio" | "ide" | "installer" | "chooser" => "vapor-gui",
         _ => "vapor",
     };
     let executable = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
@@ -524,11 +461,11 @@ mod launch_mode_tests {
         for (mode, base_name) in [
             ("play", "vapor"),
             ("game", "vapor"),
-            ("launcher", "vapor-launcher"),
+            ("launcher", "vapor-gui"),
             ("chooser", "vapor-gui"),
-            ("studio", "vapor-studio"),
-            ("ide", "vapor-ide"),
-            ("installer", "vapor-installer-gui"),
+            ("studio", "vapor-gui"),
+            ("ide", "vapor-gui"),
+            ("installer", "vapor-gui"),
         ] {
             let name = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
             assert_eq!(

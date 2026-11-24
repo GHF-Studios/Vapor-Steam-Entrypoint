@@ -32,7 +32,7 @@ Steam
     └── shell -> terminal -> vapor[.exe]
 ```
 
-Entrypoint logs go to `<app-root>/.vapor/logs/entrypoint.log`.
+Entrypoint logs go to `<Vapor User Data>/logs/entrypoint.log`.
 
 This project owns app-root discovery, game and GUI handoff, terminal recovery
 launches, argument forwarding, and entrypoint logging. Vapor owns shared

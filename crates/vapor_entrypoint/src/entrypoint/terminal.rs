@@ -342,17 +342,17 @@ fn linux_child_path(app_root: &Path) -> String {
 
 #[cfg(target_os = "linux")]
 fn is_raw_app_tool_path(app_root: &Path, path: &Path) -> bool {
-    let raw_exact = [
-        app_root.join("cargo-home/bin"),
-        app_root.join("rustup/bin"),
-        app_root.join("tools/steamcmd"),
-        app_root.join("tools/zig"),
-        app_root.join("tools/cross/bin"),
-        app_root.join("tools/llvm-mingw/bin"),
-    ];
-    if raw_exact.iter().any(|raw| path == raw) {
-        return true;
-    }
-    let toolchains = app_root.join("rustup-home/toolchains");
-    path.starts_with(&toolchains) && path.file_name().is_some_and(|name| name == "bin")
+    [Some(app_root.to_path_buf()), user_data_root()]
+        .into_iter()
+        .flatten()
+        .any(|root| {
+            [
+                "cargo-home/bin", "rustup/bin", "tools/steamcmd", "tools/zig",
+                "tools/cross/bin", "tools/llvm-mingw/bin",
+            ]
+            .iter()
+            .any(|relative| path == root.join(relative))
+                || (path.starts_with(root.join("rustup-home/toolchains"))
+                    && path.file_name().is_some_and(|name| name == "bin"))
+        })
 }
