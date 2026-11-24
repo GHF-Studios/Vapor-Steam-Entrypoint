@@ -9,3 +9,4 @@ name = "vapor-entrypoint"
 path = "src/main.rs"
 
 [dependencies]
+vapor_product_layout = { path = "../../../Vapor/crates/vapor_product_layout" }

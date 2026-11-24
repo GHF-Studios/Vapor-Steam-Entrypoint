@@ -28,30 +28,8 @@ fn platform_script(app_root: &Path) -> PathBuf {
     }
 }
 
-// The entrypoint must locate diagnostics and legacy tool paths before Vapor's
-// service or installer is available. Keep this small bootstrap path independent.
 fn user_data_root() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("AppData/Local")))
-            .map(|root| root.join("Vapor"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join("Library/Application Support/Vapor"))
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        env::var_os("XDG_DATA_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-            .map(|root| root.join("vapor"))
-    }
+    vapor_product_layout::user_data_root()
 }
 
 #[cfg(windows)]
