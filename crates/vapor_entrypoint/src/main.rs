@@ -1,8 +1,9 @@
 //! Steam-facing entrypoint for Vapor's player and creator modes.
 //!
 //! A launch without arguments starts the persistently selected composition.
-//! The `chooser` mode exposes the Launcher and creator tools; `shell` and
-//! `installer` retain recovery paths.
+//! The `creator` mode hands off to a standalone Vapor installation, while
+//! `chooser` exposes the bundled chooser for local development and recovery.
+//! `shell` and `installer` retain recovery paths.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -15,6 +16,8 @@ use std::{
     process::{Command, ExitStatus, Stdio},
     time::SystemTime,
 };
+
+const VAPOR_DOWNLOADS_URL: &str = "https://vapor.ghf-studios.site/downloads";
 
 #[cfg(windows)]
 use std::ffi::OsStr;
@@ -73,6 +76,13 @@ fn run() -> Result<ExitStatus, String> {
             .is_some_and(|argument| argument == "play" || argument == "game")
     {
         return launch_bundled_default(&executable, &app_root, &mut log);
+    }
+
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "creator")
+    {
+        return launch_standalone_creator(&mut log);
     }
 
     if starts_gui(&arguments) {
@@ -186,6 +196,61 @@ fn launch_bundled_default(
         .map_err(|error| format!("failed to launch the selected composition: {error}"))?;
     log.write(format!("bundled default launch exited with {status}"));
     Ok(status)
+}
+
+fn launch_standalone_creator(log: &mut EntryLog) -> Result<ExitStatus, String> {
+    let layout = vapor_product_layout::StandaloneProductLayout::discover()
+        .ok_or_else(|| "could not determine Vapor User Data location".to_owned())?;
+    let entrypoint = layout
+        .active_entrypoint()
+        .map_err(|error| format!("could not resolve the installed Vapor release: {error}"))?;
+
+    if let Some(entrypoint) = entrypoint {
+        log.write(format!(
+            "launching standalone Vapor creator through {}",
+            entrypoint.display()
+        ));
+        let mut command = Command::new(entrypoint);
+        command
+            .arg("chooser")
+            .current_dir(layout.root())
+            .env_remove("VAPOR_HOME")
+            .env_remove("VAPOR_USER_DATA_ROOT");
+        #[cfg(windows)]
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        return command
+            .status()
+            .map_err(|error| format!("failed to launch standalone Vapor: {error}"));
+    }
+
+    log.write(format!(
+        "standalone Vapor is not installed; opening {VAPOR_DOWNLOADS_URL}"
+    ));
+    open_downloads_page()
+}
+
+fn open_downloads_page() -> Result<ExitStatus, String> {
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/C", "start", "", VAPOR_DOWNLOADS_URL]);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg(VAPOR_DOWNLOADS_URL);
+        command
+    } else {
+        let mut command = Command::new("xdg-open");
+        command.arg(VAPOR_DOWNLOADS_URL);
+        command
+    };
+
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    command
+        .status()
+        .map_err(|error| format!("failed to open Vapor Downloads: {error}"))
 }
 
 fn terminal_request(arguments: &[OsString]) -> Result<(PathBuf, PathBuf, Vec<OsString>), String> {
