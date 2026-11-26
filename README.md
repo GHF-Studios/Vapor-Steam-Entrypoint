@@ -1,4 +1,4 @@
-# Vapor Steam Entrypoint
+# Retired Steam entrypoint
 
 Vapor Steam Entrypoint adapts Steam launches to the installed Vapor app. Its
 default launch starts the app manifest's default playable composition directly.

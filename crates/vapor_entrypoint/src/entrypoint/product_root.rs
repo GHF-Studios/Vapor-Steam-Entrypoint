@@ -1,4 +1,4 @@
-fn discover_app_root(executable: &Path) -> Option<PathBuf> {
+fn discover_product_root(executable: &Path) -> Option<PathBuf> {
     let executable = fs::canonicalize(executable).ok()?;
     let directory = executable.parent()?;
     if directory.file_name().is_some_and(|name| name == "bin") {
@@ -33,12 +33,12 @@ fn user_data_root() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn shell_safe_app_root(path: PathBuf) -> PathBuf {
+fn shell_safe_product_root(path: PathBuf) -> PathBuf {
     strip_windows_verbatim_prefix(&path)
 }
 
 #[cfg(not(windows))]
-fn shell_safe_app_root(path: PathBuf) -> PathBuf {
+fn shell_safe_product_root(path: PathBuf) -> PathBuf {
     path
 }
 
