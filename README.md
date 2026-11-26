@@ -22,7 +22,7 @@ own canonical data root. The bundled chooser route remains for local
 development and recovery; the Steam depot omits the chooser and creator GUI
 binaries.
 
-Runtime paths:
+## Vapor Home discovery
 
 ```text
 <Vapor home>

@@ -29,6 +29,7 @@ fn main() {
         Ok(status) => status.code().unwrap_or(1),
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "vapor-entrypoint: {error}");
+            show_user_error("Vapor could not start", &error);
             1
         }
     };
