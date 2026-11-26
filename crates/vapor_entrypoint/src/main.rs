@@ -191,7 +191,8 @@ fn launch_bundled_default(
     command
         .args(["launch", "bundled-default"])
         .current_dir(app_root)
-        .env("VAPOR_HOME", app_root)
+        .env("VAPOR_HOME", vapor_home)
+        .env("VAPOR_PRODUCT_ROOT", app_root)
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
         .stderr(output);
     #[cfg(windows)]

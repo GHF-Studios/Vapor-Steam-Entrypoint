@@ -6,7 +6,7 @@ The optional `creator` route starts the standalone Vapor installation, or opens
 the Downloads page when Vapor is not installed. The `chooser` route remains
 available for local development and recovery.
 
-Steam has two intended launch choices per target:
+The eventual Vapor-owned launch choices for a mounted Loo-Cast product are:
 
 | Choice | Linux target | Windows target |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ binaries.
 Runtime paths:
 
 ```text
-Steam
+<Vapor home>
 └── bin/<target>/vapor-entrypoint[.exe]
     ├── (no arguments) -> vapor[.exe] launch default
     └── creator -> Vapor User Data/apps/vapor/active release chooser
