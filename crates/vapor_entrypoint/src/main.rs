@@ -45,7 +45,7 @@ fn run() -> Result<ExitStatus, String> {
             executable.display()
         )
     })?;
-    let app_root = shell_safe_app_root(app_root);
+    let product_root = shell_safe_product_root(product_root);
     let mut log = EntryLog::open();
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     log.write(format!(
@@ -78,7 +78,8 @@ fn run() -> Result<ExitStatus, String> {
             .first()
             .is_some_and(|argument| argument == "play" || argument == "game")
     {
-        return launch_bundled_default(&executable, &app_root, &mut log);
+        let vapor_home = discover_vapor_home().ok_or_else(|| vapor_missing_message(&mut log))?;
+        return launch_bundled_default(&vapor_home, &product_root, &mut log);
     }
 
     if arguments
@@ -167,8 +168,8 @@ fn gui_arguments(arguments: &[OsString]) -> Vec<OsString> {
 }
 
 fn launch_bundled_default(
-    entrypoint: &Path,
-    app_root: &Path,
+    vapor_home: &Path,
+    product_root: &Path,
     log: &mut EntryLog,
 ) -> Result<ExitStatus, String> {
     let executable = vapor_binary(vapor_home, "vapor");
@@ -191,9 +192,9 @@ fn launch_bundled_default(
     let mut command = Command::new(&executable);
     command
         .args(["launch", "bundled-default"])
-        .current_dir(app_root)
+        .current_dir(product_root)
         .env("VAPOR_HOME", vapor_home)
-        .env("VAPOR_PRODUCT_ROOT", app_root)
+        .env("VAPOR_PRODUCT_ROOT", product_root)
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
         .stderr(output);
     #[cfg(windows)]
@@ -444,31 +445,6 @@ fn host_runtime_target() -> &'static str {
     {
         "unsupported-host"
     }
-}
-
-fn discover_vapor_home() -> Option<PathBuf> {
-    let home = env::var_os("VAPOR_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            #[cfg(windows)]
-            let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
-            #[cfg(not(windows))]
-            let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
-            home.map(PathBuf::from).map(|home| home.join("Vapor"))
-        })?;
-    let marker = home.join("Vapor-Home.toml");
-    let source = fs::read_to_string(marker).ok()?;
-    let mut lines = source.lines().map(str::trim);
-    if lines.next() != Some("schema = 1")
-        || lines.next() != Some("")
-        || lines.next() != Some("[vapor]")
-        || lines.next() != Some("id = \"ghf-studios/vapor\"")
-        || lines.next().is_some()
-    {
-        return None;
-    }
-    Some(home)
 }
 
 fn vapor_missing_message(log: &mut EntryLog) -> String {
